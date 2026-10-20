@@ -1,0 +1,13 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Scan members</title><link rel="stylesheet" href="style.css"></head><body>
+<a href="dashboard.html">&larr; Back</a><h1>Scan member QR</h1><select id="sel"></select><div id="reader"></div><button class="alt" onclick="flip()">Switch camera</button><p id="res"></p>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script><script src="supabase.js"></script><script src="profile.js"></script>
+<script>
+const res=document.getElementById("res"),sel=document.getElementById("sel"),h=new Html5Qrcode("reader");let cams=[],i=0,busy=false;
+(async()=>{if(!(await sb.auth.getSession()).data.session)return location="index.html";const me_=await uid();
+ const evs=(await getEvents()).filter(e=>e.owner==me_);sel.innerHTML=evs.map(e=>'<option value="'+e.id+'">'+e.name+'</option>').join("");if(!evs.length)res.textContent="Create an event first"})();
+async function onScan(t){if(busy)return;busy=true;try{const r=await memberCheck(sel.value,t);res.className="ok";
+ res.textContent=r.name+(r.org?" ("+r.org+")":"")+(r.action=="in"?": checked IN":": checked OUT, hours saved")}catch(e){res.className="bad";res.textContent=e.message}setTimeout(()=>busy=false,3000)}
+async function go(){try{await h.stop()}catch(e){}await h.start(cams[i].id,{fps:10,qrbox:220},onScan)}
+function flip(){i=(i+1)%cams.length;go()}
+Html5Qrcode.getCameras().then(c=>{cams=c;const b=c.findIndex(x=>/back|rear|environment/i.test(x.label));i=b>=0?b:0;go()}).catch(e=>res.textContent="Camera error: "+e);
+</script></body></html>

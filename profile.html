@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="manifest" href="manifest.json">
+  <title>My Profile</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="top">
+    <a href="dashboard.html" style="font-size:1.7rem;text-decoration:none;color:var(--ink)">&#8592;</a>
+    <b class="brand">My Profile</b>
+    <span></span>
+  </div>
+
+  <div class="card">
+    <p id="first" class="ok"></p>
+    <input id="name" placeholder="Full name">
+    <input id="phone" type="tel" placeholder="Phone number">
+    <select id="role">
+      <option value="">Select role</option>
+      <option value="volunteer">Volunteer</option>
+      <option value="organizer">Organizer</option>
+    </select>
+    <input id="org" placeholder="Organization / Department / College">
+    <input id="emp_id" placeholder="Employee / Member ID (optional)">
+    <input id="city" placeholder="City">
+    <input id="bio" placeholder="About you (optional)">
+    <button id="saveBtn" onclick="save()">Save profile</button>
+    <button class="alt" onclick="out()">Log out</button>
+    <p id="msg" class="bad"></p>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase.js"></script>
+  <script src="profile.js"></script>
+  <script src="ui.js"></script>
+  <script>
+    // Uses profile.js: getProfile, ensureMember, saveProfileData, TYPES
+    const $ = i => document.getElementById(i), F = ["name", "phone", "role", "org", "emp_id", "city", "bio"]; let P;
+    $("role").innerHTML = '<option value="">I am a... (select)</option>' + TYPES.map(t => '<option value="' + t + '">' + t.charAt(0).toUpperCase() + t.slice(1) + "</option>").join("");
+    (async () => {
+      if (!(await sb.auth.getSession()).data.session) return location = "index.html";
+      P = await ensureMember(await getProfile()); F.forEach(f => $(f).value = P[f] || "");
+      if (!P.role) $("first").textContent = "Welcome! Complete your profile to continue.";
+    })();
+    async function save() {
+      const f = {}; F.forEach(k => f[k] = $(k).value.trim());
+      if (!f.name || !f.role) return $("msg").textContent = "Name and member role are required";
+      $("saveBtn").disabled = true;
+      try {
+        P = await saveProfileData(f); $("msg").textContent = ""; $("first").textContent = "Saved! Opening dashboard...";
+        setTimeout(() => location = "dashboard.html", 800);   // go to dashboard after save
+      } catch (e) { $("msg").textContent = e.message; $("saveBtn").disabled = false }
+    }
+    async function out() { await sb.auth.signOut(); localStorage.clear(); location = "index.html" }
+  </script>
+</body>
+</html>

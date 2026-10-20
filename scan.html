@@ -1,0 +1,50 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="manifest" href="manifest.json"><meta name="theme-color" content="#0f3d3e"><title>Scan</title><link rel="stylesheet" href="style.css"></head><body>
+<h1>Scan event QR</h1><div id="reader"></div><p id="res"></p><p id="pending"></p><a href="dashboard.html">Back</a>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script><script src="supabase.js"></script><script src="qr.js"></script>
+<script src="checkin-guard.js"></script>
+<script src="offline.js"></script>
+<script>
+// VINAY: scan -> validate token -> get GPS -> check in/out
+const res=document.getElementById("res");let busy=false;
+const pendingEl=document.getElementById("pending");
+
+// Is this error a network problem (retry later) or a real refusal (show to the person)?
+const isNetworkError=e=>!navigator.onLine||/failed to fetch|network|load failed/i.test(String(e&&e.message));
+
+// Used by offline.js to send saved scans when internet returns
+const sendSaved=async item=>{
+ try{await scanEvent(item.eventId,item.lat,item.lng);return{ok:true}}
+ catch(e){if(isNetworkError(e))throw e;return{ok:false,rejected:true,reason:e.message}}
+};
+
+function showPending(){
+ const n=SevaOffline.pending().length;
+ pendingEl.textContent=n?n+" scan(s) saved on this phone. They will send when internet returns.":"";
+}
+window.addEventListener("seva-sync",e=>{
+ showPending();
+ const rej=e.detail.rejected;
+ if(rej&&rej.length){res.className="bad";res.textContent="Saved scan was refused: "+rej[0].reason}
+});
+SevaOffline.autoSync(sendSaved);showPending();
+
+function saveOffline(eid,p){
+ SevaOffline.enqueue({eventId:eid,lat:p.coords.latitude,lng:p.coords.longitude,kind:"scan"});
+ res.className="ok";res.textContent="Saved on your phone. It will send when internet returns.";showPending();
+}
+
+new Html5Qrcode("reader").start({facingMode:"environment"},{fps:10,qrbox:220},text=>{
+ if(busy)return;busy=true;const eid=tokenValid(text);
+ if(!eid){res.className="bad";res.textContent="QR expired or invalid. Scan the live QR again.";busy=false;return}
+ navigator.geolocation.getCurrentPosition(async p=>{try{
+  if(!navigator.onLine){saveOffline(eid,p)}
+  else{
+   const r=await scanEvent(eid,p.coords.latitude,p.coords.longitude);
+   res.className="ok";res.textContent=r=="in"?"Checked in. Scan again to check out.":"Checked out. Hours saved.";
+  }
+ }catch(e){
+  if(isNetworkError(e)){saveOffline(eid,p)}
+  else{res.className="bad";res.textContent=e.message}
+ }setTimeout(()=>busy=false,4000)},()=>{res.textContent="Allow location access";busy=false})
+});
+</script></body></html>

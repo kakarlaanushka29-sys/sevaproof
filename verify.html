@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="manifest" href="manifest.json"><meta name="theme-color" content="#0f3d3e"><title>Verify</title><link rel="stylesheet" href="style.css"></head><body>
+<h1>Certificate check</h1><div id="out" class="card">Checking...</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabase.js"></script><script src="hash.js"></script>
+<script>
+// SOWMYA: public verify page with tamper check
+(async()=>{const q=new URLSearchParams(location.search),id=q.get("id"),h=q.get("h"),o=document.getElementById("out");
+ const{data:c}=id?await sb.from("checkins").select("*").eq("id",id).maybeSingle():{};
+ if(!c||!c.out_time)return o.innerHTML='<p class="bad">Not verified. No such record.</p>';
+ const now=await certHash(c);
+ if(h&&h!==now)return o.innerHTML='<p class="bad">TAMPERED &#10006;</p>This certificate does not match our records. Do not trust it.';
+ o.innerHTML='<p class="ok">Verified &#10004;</p><b>'+c.name+'</b><br>'+c.hours+' hours<br>'+c.event_name+'<br>'+new Date(c.out_time).toLocaleDateString()+'<br><small>'+(h?'Fingerprint match: '+now:'No fingerprint in this link')+'</small>'})();
+</script></body></html>

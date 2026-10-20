@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f3d3e">
+  <title>Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    #main{max-width:760px;margin:0 auto;padding:0 12px 40px}
+    .prof{display:flex;gap:12px;align-items:center}
+    .pav{width:48px;height:48px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:1.3rem;background:rgba(255,255,255,.18)}
+    .pinfo{flex:1;display:flex;flex-direction:column}
+    .pinfo small{opacity:.8;text-transform:capitalize}
+    .center{text-align:center}
+    .qrbox,#qr{display:inline-block;background:#fff;padding:10px;border-radius:12px;margin:10px 0}
+    .wide{width:100%;margin:10px 0}
+    .stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:10px 0}
+    .stats div{background:rgba(255,255,255,.1);border-radius:12px;padding:12px;text-align:center;display:flex;flex-direction:column}
+    .stats b{font-size:1.5rem}
+    .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .scroll{overflow-x:auto;margin-top:8px}
+    table{width:100%;border-collapse:collapse;font-size:.85rem}
+    th,td{padding:6px;text-align:left;border-bottom:1px solid rgba(255,255,255,.15);white-space:nowrap}
+    .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:50}
+    .overlay video{width:min(92vw,420px);border-radius:12px}
+  </style>
+</head>
+<body>
+  <div class="top"><h1 id="hi"></h1><a class="avatar" id="av" href="challenges.html">Challenges</a></div>
+  <p id="err" class="bad"></p>
+  <p class="center"><a href="challenges.html">Challenges and outcomes</a></p>
+  <div id="main">Loading...</div>
+
+  <div id="scan" class="overlay">
+    <b>Point camera at a volunteer's QR</b>
+    <video id="cam" playsinline muted></video><canvas id="cv" hidden></canvas>
+    <button onclick="closeScanner()">Close</button>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+  <script src="qr.js"></script>
+  <script src="hash.js"></script>
+  <script src="certificate.js"></script>
+  <script>
+    // ===== Helpers =====
+    const $ = id => document.getElementById(id), m = $("main"); let timer, ROWS = [], EVS = [], stream;
+    const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const fmt = v => v ? new Date(v).toLocaleString() : "-";
+    const fail = e => { $("err").textContent = "Error: " + (e && e.message ? e.message : e); };
+    const memberUrl = P => new URL("member.html?c=" + encodeURIComponent(P.member_code), location.href).href;
+
+    // ===== Start: load profile from Supabase, then show volunteer or organizer screen =====
+    async function boot() {
+      try {
+        $("err").textContent = "";
+        const { data } = await sb.auth.getSession();
+        if (!data.session) return location = "index.html";
+        const userId = data.session.user.id;
+        const r = await sb.from("profiles").select("*").eq("id", userId).maybeSingle();
+        if (r.error) throw r.error;
+        const P = r.data;
+        if (!P || !P.name || !P.role) return location = "profile.html";   // profile not completed yet
+        P.role = String(P.role).toLowerCase();
+        $("hi").textContent = "Hi " + P.name.split(" ")[0];
+        $("av").textContent = P.name[0].toUpperCase();
+        if (P.role === "organizer") await organizer(P); else await volunteer(P, userId);
+      } catch (e) { fail(e); }
+    }
+
+    function profileCard(P) {
+      return '<div class="card prof"><div class="pav">' + esc(P.name[0].toUpperCase()) + '</div><div class="pinfo"><b>' + esc(P.name) +
+        '</b><small>' + esc(P.role) + (P.org ? " · " + esc(P.org) : "") + '</small><small>ID ' + esc((P.member_code || "").slice(0, 6).toUpperCase()) +
+        (P.city ? " · " + esc(P.city) : "") + '</small></div><button class="alt" onclick="location=\'profile.html\'">Edit</button></div>';
+    }
+
+    // ===== VOLUNTEER screen =====
+    async function volunteer(P, userId) {
+      const q = await sb.from("checkins").select("*").eq("uid", userId).order("in_time", { ascending: false });
+      if (q.error) throw q.error;
+      const c = q.data || [], done = c.filter(x => x.out_time);
+      const tot = done.reduce((s, x) => s + Number(x.hours || 0), 0), ev = done.length;
+      const B = [["&#127793;", "First event", ev >= 1], ["&#129353;", "Bronze 5h", tot >= 5], ["&#129352;", "Silver 20h", tot >= 20], ["&#129351;", "Gold 50h", tot >= 50]];
+      const nxt = [5, 20, 50].find(t => tot < t), pct = nxt ? Math.min(100, tot / nxt * 100) : 100;
+      m.innerHTML = profileCard(P) +
+        '<div class="card center"><small>MY UNIQUE QR</small><br><div id="mq" class="qrbox"></div><br><small>Anyone who scans this sees your attendance and certificates</small></div>' +
+        '<button class="alt wide" onclick="location=\'scan.html\'">Scan event QR (check in / out)</button>' +
+        '<div class="card pass"><small>VOLUNTEER PASSPORT</small><h2>' + tot.toFixed(2) + ' h</h2><div>' + ev + ' verified event' + (ev == 1 ? "" : "s") + '</div>' +
+        '<div class="bar"><i style="width:' + pct + '%"></i></div><small>' + (nxt ? (nxt - tot).toFixed(2) + " h to next badge" : "All badges unlocked") + '</small>' +
+        '<div class="badges">' + B.map(b => '<span style="opacity:' + (b[2] ? 1 : .3) + '">' + b[0] + " " + b[1] + "</span> ").join("") + '</div></div>' +
+        '<h3>My hours</h3>' +
+        (c.map(x => '<div class="card"><b>' + esc(x.event_name) + '</b><br>' + Number(x.hours || 0).toFixed(2) + ' hours · ' + fmt(x.in_time) +
+          (x.out_time ? '<br><button onclick="makeCertificate(\'' + esc(x.id) + '\')">Download certificate</button>' : "<br>In progress") + '</div>').join("") || '<div class="card">No events yet. Scan an event QR to check in.</div>');
+      new QRCode($("mq"), { text: memberUrl(P), width: 180, height: 180 });
+    }
+
+    // ===== ORGANIZER screen =====
+    async function organizer(P) {
+      const myid = await uid();
+      EVS = (await getEvents()).filter(e => e.owner == myid);
+      ROWS = [];
+      if (EVS.length) {
+        const q = await sb.from("checkins").select("*").in("event_id", EVS.map(e => e.id));
+        if (q.error) throw q.error;
+        ROWS = q.data || [];
+      }
+      const vols = new Set(ROWS.map(x => x.uid)).size, hrs = ROWS.reduce((s, x) => s + Number(x.hours || 0), 0), live = ROWS.filter(x => !x.out_time).length;
+      m.innerHTML = profileCard(P) +
+        '<div class="stats"><div><b>' + EVS.length + '</b><small>Events</small></div><div><b>' + vols + '</b><small>Volunteers</small></div>' +
+        '<div><b>' + hrs.toFixed(1) + '</b><small>Total hours</small></div><div><b>' + live + '</b><small>Working now</small></div></div>' +
+        '<button class="alt wide" onclick="openScanner()">Scan a volunteer QR</button>' +
+        '<div class="card"><input id="en" placeholder="Event name"><button onclick="addEv()">Create event here (uses your location)</button></div>' +
+        '<div class="card center" id="qrcard" style="display:none"><small id="qrt"></small><br><div id="qr"></div><br><small>Volunteers scan this to check in / out. It refreshes automatically.</small></div>' +
+        '<h3>My events</h3>' +
+        (EVS.map(e => {
+          const r = ROWS.filter(x => x.event_id == e.id), h = r.reduce((s, x) => s + Number(x.hours || 0), 0), i = esc(e.id);
+          return '<div class="card"><b>' + esc(e.name) + '</b><br><small>' + r.length + ' volunteers · ' + h.toFixed(2) + ' h</small>' +
+            '<div class="row"><button class="alt" onclick="qrFor(\'' + i + '\')">Show live QR</button><button onclick="att(\'' + i + '\')">Attendance</button>' +
+            '<button class="alt" onclick="csv(\'' + i + '\')">Export CSV</button></div><div id="a_' + i + '"></div></div>';
+        }).join("") || '<div class="card">No events yet. Create your first event above.</div>');
+    }
+
+    function addEv() {
+      const n = $("en").value.trim();
+      if (!n) return fail("Enter an event name");
+      navigator.geolocation.getCurrentPosition(async p => {
+        try { await createEvent(n, p.coords.latitude, p.coords.longitude); await boot(); } catch (e) { fail(e); }
+      }, () => fail("Please allow location to create an event"));
+    }
+
+    function qrFor(id) {
+      clearInterval(timer);
+      const e = EVS.find(x => x.id == id);
+      $("qrcard").style.display = "block"; $("qrt").textContent = "LIVE QR: " + (e ? e.name : "");
+      timer = startRotating($("qr"), id);
+      $("qrcard").scrollIntoView({ behavior: "smooth" });
+    }
+
+    function att(id) {
+      const box = $("a_" + id);
+      if (box.innerHTML) { box.innerHTML = ""; return; }
+      const r = ROWS.filter(x => x.event_id == id);
+      box.innerHTML = r.length ? '<div class="scroll"><table><tr><th>Name</th><th>Check-in</th><th>Check-out</th><th>Hours</th><th>Status</th></tr>' +
+        r.map(x => "<tr><td>" + esc(x.name) + "</td><td>" + fmt(x.in_time) + "</td><td>" + fmt(x.out_time) + "</td><td>" + Number(x.hours || 0).toFixed(2) +
+          "</td><td>" + (x.out_time ? "Completed ✅ certificate ready" : "Working now") + "</td></tr>").join("") + "</table></div>" : "<small>No check-ins yet</small>";
+    }
+
+    function csv(id) {
+      const r = ROWS.filter(x => x.event_id == id), q = v => '"' + String(v ?? "").replace(/"/g, '""') + '"';
+      const rows = [["Name", "Event", "Check-in", "Check-out", "Hours"]].concat(r.map(x => [x.name, x.event_name, x.in_time ? new Date(x.in_time).toLocaleString() : "", x.out_time ? new Date(x.out_time).toLocaleString() : "", x.hours]));
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob(["\ufeff" + rows.map(l => l.map(q).join(",")).join("\n")], { type: "text/csv" }));
+      a.download = (r[0] ? r[0].event_name : "event") + "-attendance.csv"; a.click();
+    }
+
+    // ===== Organizer: scan a volunteer's QR (opens that volunteer's record page) =====
+    async function openScanner() {
+      $("scan").style.display = "flex";
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        const v = $("cam"); v.srcObject = stream; await v.play(); tick();
+      } catch (e) { closeScanner(); fail("Camera not available: " + e.message); }
+    }
+    function closeScanner() { $("scan").style.display = "none"; if (stream) stream.getTracks().forEach(t => t.stop()); stream = null; }
+    function tick() {
+      if (!stream) return;
+      const v = $("cam");
+      if (v.readyState === v.HAVE_ENOUGH_DATA) {
+        const c = $("cv"), x = c.getContext("2d"); c.width = v.videoWidth; c.height = v.videoHeight; x.drawImage(v, 0, 0);
+        const d = x.getImageData(0, 0, c.width, c.height), r = jsQR(d.data, d.width, d.height);
+        if (r && r.data) { closeScanner(); return openMember(r.data); }
+      }
+      requestAnimationFrame(tick);
+    }
+    function openMember(t) {
+      let code = null;
+      try { code = new URL(t).searchParams.get("c"); } catch (e) { }
+      if (!code) { try { code = JSON.parse(t).code; } catch (e) { } }
+      if (code) location = "member.html?c=" + encodeURIComponent(code); else fail("Unknown QR: " + String(t).slice(0, 60));
+    }
+
+    boot();
+  </script>
+  <script src="ui.js"></script>
+</body>
+</html>
